@@ -1,0 +1,1042 @@
+[gd_scene load_steps=9 format=3]
+
+[sub_resource type="Shader" id="Shader_bg"]
+code = "shader_type canvas_item;
+
+// Advanced Fusion Console background: dark gradient, XMB-style flowing ribbons,
+// animated scanlines, electric glow, and ambient noise for that true console feel.
+
+uniform vec4 accent : source_color = vec4(0.8, 0.04, 0.07, 1.0);
+uniform float scanline_intensity : hint_range(0.0, 1.0) = 0.08;
+uniform float glow_intensity : hint_range(0.0, 2.0) = 0.6;
+
+void fragment() {
+	vec2 uv = UV;
+	float t = TIME;
+
+	// base gradient (dark to accent)
+	float g = clamp(uv.x * 0.6 + uv.y * 0.55 - 0.1, 0.0, 1.0);
+	vec3 col = mix(vec3(0.01, 0.005, 0.015), accent.rgb * 0.4, pow(g, 1.4));
+
+	// big soft diagonal bands (flowing ribbons)
+	for (int i = 0; i < 4; i++) {
+		float fi = float(i);
+		float p = uv.x * 0.9 - uv.y * 0.55 + fi * 0.37 + sin(t * 0.05 + fi * 2.1) * 0.12;
+		float band = 0.5 + 0.5 * sin(p * 5.6 + fi * 1.7);
+		col += accent.rgb * pow(band, 7.0) * 0.06 * glow_intensity;
+	}
+
+	// flowing ribbons with smooth motion
+	for (int i = 0; i < 5; i++) {
+		float fi = float(i);
+		float y = 0.62 + fi * 0.04
+			+ sin(uv.x * (2.4 + fi * 0.5) + t * (0.15 + fi * 0.04) + fi * 1.3) * 0.08
+			+ sin(uv.x * (1.1 + fi * 0.3) - t * 0.12 + fi) * 0.06;
+		float d = abs(uv.y - y);
+		float fill = 1.0 - smoothstep(0.0, 0.16, d);
+		float line = 1.0 - smoothstep(0.0, 0.003, d);
+		col += accent.rgb * fill * fill * (0.12 - fi * 0.018) * glow_intensity;
+		col += mix(accent.rgb, vec3(1.0), 0.7) * line * 0.12;
+	}
+
+	// thin light streaks (electric effect)
+	for (int i = 0; i < 6; i++) {
+		float fi = float(i);
+		float p = uv.x * 0.45 + uv.y * 0.9;
+		float q = uv.x * 0.9 - uv.y * 0.45;
+		float c = fract(p + fi * 0.213 + t * 0.008 * (1.0 + fi * 0.3));
+		float l = 1.0 - smoothstep(0.0, 0.002, abs(c - 0.5));
+		float m = pow(0.5 + 0.5 * sin(q * 5.0 + fi * 2.3 + t * 0.4), 3.0);
+		col += mix(accent.rgb, vec3(1.0), 0.6) * l * m * 0.4 * glow_intensity;
+	}
+
+	// animated scanlines (console aesthetic)
+	float scan = sin(uv.y * 1080.0 + t * 8.0) * 0.5 + 0.5;
+	col *= mix(1.0, 0.92 + scan * 0.08, scanline_intensity);
+
+	// keep bottom calmer for text
+	col *= mix(1.0, 0.55, smoothstep(0.55, 1.0, uv.y));
+
+	COLOR = vec4(col, 1.0);
+}
+"
+
+[sub_resource type="ShaderMaterial" id="Mat_bg"]
+shader = SubResource("Shader_bg")
+
+[sub_resource type="Shader" id="Shader_post"]
+code = "shader_type canvas_item;
+
+// Post-production: bloom, lens fringing, sharpen, vignette, scanlines, screen distortion.
+// No grain — clean, pristine, premium console feel.
+
+uniform sampler2D screen_tex : hint_screen_texture, repeat_disable, filter_linear_mipmap;
+
+uniform float bloom_strength = 0.5;
+uniform float bloom_boost = 0.0;
+uniform float bloom_threshold = 0.42;
+uniform float ca_amount = 0.003;
+uniform float vignette = 0.5;
+uniform float saturation = 1.15;
+uniform float contrast = 1.08;
+uniform float exposure = 1.0;
+uniform float sharpen = 0.4;
+uniform float scanline_mix = 0.05;
+uniform float screen_curve = 0.0;
+
+vec3 bloom_tap(vec2 uv, float lod, vec2 pix) {
+	vec2 px = pix * exp2(lod) * 0.75;
+	vec3 s = vec3(0.0);
+	s += textureLod(screen_tex, uv + vec2( px.x,  px.y), lod).rgb;
+	s += textureLod(screen_tex, uv + vec2(-px.x,  px.y), lod).rgb;
+	s += textureLod(screen_tex, uv + vec2( px.x, -px.y), lod).rgb;
+	s += textureLod(screen_tex, uv + vec2(-px.x, -px.y), lod).rgb;
+	s *= 0.25;
+	return max(s - vec3(bloom_threshold), vec3(0.0));
+}
+
+void fragment() {
+	vec2 uv = SCREEN_UV;
+	vec2 c = uv - 0.5;
+
+	// lens fringing (grows toward edges)
+	vec2 off = c * ca_amount * 2.0;
+	vec3 col;
+	col.r = textureLod(screen_tex, uv + off, 0.0).r;
+	col.g = textureLod(screen_tex, uv, 0.0).g;
+	col.b = textureLod(screen_tex, uv - off, 0.0).b;
+
+	// sharpen
+	vec2 px = SCREEN_PIXEL_SIZE;
+	vec3 blur = textureLod(screen_tex, uv + vec2(px.x, 0.0), 0.0).rgb
+		+ textureLod(screen_tex, uv - vec2(px.x, 0.0), 0.0).rgb
+		+ textureLod(screen_tex, uv + vec2(0.0, px.y), 0.0).rgb
+		+ textureLod(screen_tex, uv - vec2(0.0, px.y), 0.0).rgb;
+	blur *= 0.25;
+	col += (col - blur) * sharpen;
+
+	// bloom (multi-mip, soft)
+	vec3 b = bloom_tap(uv, 2.0, px) * 0.35
+		+ bloom_tap(uv, 3.0, px) * 0.32
+		+ bloom_tap(uv, 4.0, px) * 0.28
+		+ bloom_tap(uv, 5.0, px) * 0.22
+		+ bloom_tap(uv, 6.0, px) * 0.18;
+	col += b * (bloom_strength + bloom_boost) * 2.0;
+
+	// grade
+	col *= exposure;
+	col = (col - 0.5) * contrast + 0.5;
+	float luma = dot(col, vec3(0.299, 0.587, 0.114));
+	col = mix(vec3(luma), col, saturation);
+
+	// vignette
+	float v = 1.0 - smoothstep(0.30, 0.80, length(c * vec2(1.0, 0.92)));
+	col *= mix(1.0 - vignette, 1.0, v);
+
+	// scanlines
+	float sc = sin(SCREEN_UV.y * 1080.0) * 0.5 + 0.5;
+	col = mix(col, col * (0.95 + sc * 0.1), scanline_mix);
+
+	COLOR = vec4(clamp(col, 0.0, 1.0), 1.0);
+}
+"
+
+[sub_resource type="ShaderMaterial" id="Mat_post"]
+shader = SubResource("Shader_post")
+
+[sub_resource type="GDScript" id="GDScript_console"]
+script/source = "extends Control
+
+# Advanced Fusion Console v2.0 - All-in-one scene with achievements, exe icons, advanced UX
+# Godot 4.7+ required
+
+const USERS_PATH := 'user://fusion_users.cfg'
+const ACHIEVEMENTS_PATH := 'user://fusion_achievements.cfg'
+const CFG_PATH := 'user://fusion_console.cfg'
+const DESIGN := Vector2i(1920, 1080)
+const RATE := 22050
+
+const THEMES := [
+	{'n': 'Fusion Red', 'c': Color(0.80, 0.04, 0.07)},
+	{'n': 'Ocean Blue', 'c': Color(0.08, 0.38, 0.85)},
+	{'n': 'Emerald', 'c': Color(0.05, 0.62, 0.32)},
+	{'n': 'Violet', 'c': Color(0.50, 0.18, 0.80)},
+	{'n': 'Amber', 'c': Color(0.92, 0.52, 0.05)},
+]
+
+const AVATAR_COLORS := [
+	Color(0.80, 0.04, 0.07),
+	Color(0.08, 0.38, 0.85),
+	Color(0.05, 0.62, 0.32),
+	Color(0.50, 0.18, 0.80),
+	Color(0.92, 0.52, 0.05),
+	Color(0.90, 0.20, 0.55),
+]
+
+# session state
+var user_name := 'Player 1'
+var user_color := Color(0.80, 0.04, 0.07)
+var signed_in := false
+var intro_played := false
+var current_screen := 'login'
+var theme_index := 0
+
+var _window_done := false
+var _font_r: SystemFont
+var _font_b: SystemFont
+
+# achievements system
+var achievements := {
+	'first_login': {'name': 'Welcome', 'desc': 'Sign in for the first time', 'unlocked': false, 'icon': '🎮'},
+	'first_game': {'name': 'Game Collector', 'desc': 'Add your first game', 'unlocked': false, 'icon': '📦'},
+	'theme_changer': {'name': 'Style Master', 'desc': 'Change your theme', 'unlocked': false, 'icon': '🎨'},
+	'launch_game': {'name': 'Launch Master', 'desc': 'Launch your first game', 'unlocked': false, 'icon': '🚀'},
+}
+
+# ========================================== Window / Fonts
+
+func setup_window(w: Window) -> void:
+	w.content_scale_size = DESIGN
+	w.content_scale_mode = Window.CONTENT_SCALE_MODE_CANVAS_ITEMS
+	w.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_EXPAND
+	if _window_done:
+		return
+	_window_done = true
+	if w.mode != Window.MODE_WINDOWED:
+		return
+	var scr := DisplayServer.screen_get_usable_rect()
+	var sz := DESIGN
+	if sz.x > scr.size.x or sz.y > scr.size.y:
+		var s := minf(float(scr.size.x) / float(DESIGN.x), float(scr.size.y) / float(DESIGN.y)) * 0.92
+		sz = Vector2i(int(DESIGN.x * s), int(DESIGN.y * s))
+	w.size = sz
+	w.position = scr.position + (scr.size - sz) / 2
+
+
+func font(bold := false) -> SystemFont:
+	if _font_r == null:
+		var names := PackedStringArray(['Segoe UI', 'SF Pro Display', 'Helvetica Neue', 'Roboto', 'Arial'])
+		_font_r = SystemFont.new()
+		_font_r.font_names = names
+		_font_b = SystemFont.new()
+		_font_b.font_names = names
+		_font_b.font_weight = 700
+	return _font_b if bold else _font_r
+
+
+func label(text: String, size_px: int, bold := false, col := Color.WHITE) -> Label:
+	var l := Label.new()
+	l.text = text
+	l.add_theme_font_override('font', font(bold))
+	l.add_theme_font_size_override('font_size', size_px)
+	l.add_theme_color_override('font_color', col)
+	l.add_theme_color_override('font_shadow_color', Color(0, 0, 0, 0.45))
+	l.add_theme_constant_override('shadow_offset_y', 2)
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return l
+
+
+func ignore_mouse(n: Node) -> void:
+	for c in n.get_children():
+		if c is Control:
+			c.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		ignore_mouse(c)
+
+
+# ========================================== Config / Achievements
+
+func read_cfg(section: String, key: String, default: Variant) -> Variant:
+	var cfg := ConfigFile.new()
+	if cfg.load(CFG_PATH) != OK:
+		return default
+	return cfg.get_value(section, key, default)
+
+
+func save_cfg() -> void:
+	var cfg := ConfigFile.new()
+	cfg.set_value('ui', 'theme', theme_index)
+	cfg.save(CFG_PATH)
+
+
+func load_achievements() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(ACHIEVEMENTS_PATH) != OK:
+		return
+	for key in achievements.keys():
+		achievements[key]['unlocked'] = bool(cfg.get_value('achievements', key, false))
+
+
+func save_achievements() -> void:
+	var cfg := ConfigFile.new()
+	for key in achievements.keys():
+		cfg.set_value('achievements', key, achievements[key]['unlocked'])
+	cfg.save(ACHIEVEMENTS_PATH)
+
+
+func unlock_achievement(key: String) -> void:
+	if achievements.has(key) and not achievements[key]['unlocked']:
+		achievements[key]['unlocked'] = true
+		save_achievements()
+		_show_achievement(key)
+
+
+func _show_achievement(key: String) -> void:
+	if not achievements.has(key):
+		return
+	var ach := achievements[key]
+	var noti_panel = Panel.new()
+	noti_panel.size = Vector2(520, 140)
+	noti_panel.position = Vector2(1400, 50)
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.08, 0.08, 0.12, 0.95)
+	sb.set_corner_radius_all(20)
+	sb.set_border_width_all(3)
+	sb.border_color = user_color.lightened(0.5)
+	sb.shadow_color = Color(user_color, 0.8)
+	sb.shadow_size = 40
+	noti_panel.add_theme_stylebox_override('panel', sb)
+	
+	var icon_l = label(str(ach['icon']), 64, true, user_color)
+	icon_l.position = Vector2(20, 15)
+	noti_panel.add_child(icon_l)
+	
+	var name_l = label('ACHIEVEMENT UNLOCKED', 18, true, Color(1, 1, 1, 0.9))
+	name_l.position = Vector2(100, 15)
+	noti_panel.add_child(name_l)
+	
+	var title_l = label(str(ach['name']), 36, true, user_color)
+	title_l.position = Vector2(100, 38)
+	noti_panel.add_child(title_l)
+	
+	var desc_l = label(str(ach['desc']), 14, false, Color(1, 1, 1, 0.65))
+	desc_l.position = Vector2(100, 80)
+	noti_panel.add_child(desc_l)
+	
+	add_child(noti_panel)
+	var tw := create_tween()
+	noti_panel.modulate.a = 0.0
+	tw.tween_property(noti_panel, 'modulate:a', 1.0, 0.3)
+	tw.tween_interval(3.5)
+	tw.tween_property(noti_panel, 'modulate:a', 0.0, 0.4)
+	tw.tween_callback(noti_panel.queue_free)
+
+
+# ========================================== Profiles
+
+func load_users() -> Array:
+	var cfg := ConfigFile.new()
+	if cfg.load(USERS_PATH) != OK:
+		return [{'name': 'Player 1', 'ci': 0, 'pin': ''}]
+	var v: Variant = cfg.get_value('users', 'list', [])
+	return v if v is Array else []
+
+
+func save_users(list: Array) -> void:
+	var cfg := ConfigFile.new()
+	cfg.set_value('users', 'list', list)
+	cfg.save(USERS_PATH)
+
+
+func hash_pin(uname: String, pin: String) -> String:
+	return (uname + ':fusion:' + pin).sha256_text()
+
+
+func sign_in(uname: String, col: Color) -> void:
+	user_name = uname
+	user_color = col
+	signed_in = true
+	unlock_achievement('first_login')
+
+
+# ========================================== Synthesized Sounds
+
+func synth(notes: Array, total: float) -> AudioStreamWAV:
+	var n := int(total * RATE)
+	var buf := PackedFloat32Array()
+	buf.resize(n)
+	for nt in notes:
+		var f: float = nt[0]
+		var st: float = nt[1]
+		var du: float = nt[2]
+		var am: float = nt[3]
+		var at: float = nt[4]
+		var i0 := int(st * RATE)
+		var cnt := int(du * RATE)
+		for j in cnt:
+			var i := i0 + j
+			if i >= n:
+				break
+			var tt := float(j) / float(RATE)
+			var env := minf(tt / at, 1.0) * exp(-4.0 * tt / du) * clampf((du - tt) / 0.012, 0.0, 1.0)
+			var ph := TAU * f * tt
+			buf[i] += (sin(ph) + 0.22 * sin(ph * 2.0)) * env * am
+	var data := PackedByteArray()
+	data.resize(n * 2)
+	for i in n:
+		data.encode_s16(i * 2, int(clampf(buf[i], -1.0, 1.0) * 30000.0))
+	var w := AudioStreamWAV.new()
+	w.format = AudioStreamWAV.FORMAT_16_BITS
+	w.mix_rate = RATE
+	w.stereo = false
+	w.data = data
+	return w
+
+
+func player(parent: Node, notes: Array, total: float, db: float) -> AudioStreamPlayer:
+	var p := AudioStreamPlayer.new()
+	p.stream = synth(notes, total)
+	p.volume_db = db
+	parent.add_child(p)
+	return p
+
+
+func boot_notes() -> Array:
+	return [
+		[110.0, 0.0, 4.5, 0.35, 1.2],
+		[164.81, 0.0, 4.5, 0.30, 1.4],
+		[220.0, 0.3, 4.2, 0.22, 1.2],
+		[329.63, 0.4, 4.0, 0.16, 1.5],
+		[1318.5, 1.2, 2.0, 0.18, 0.01],
+		[1760.0, 1.45, 2.0, 0.14, 0.01],
+		[2093.0, 1.7, 2.4, 0.12, 0.01],
+		[2637.0, 2.0, 2.6, 0.10, 0.01],
+	]
+
+
+# ========================================== Extract EXE Icon
+
+func extract_exe_icon(exe_path: String) -> Texture2D:
+	# Windows: Use Windows API via DLL, or return placeholder
+	# For now, return a generated icon based on filename hash
+	if not FileAccess.file_exists(exe_path):
+		return null
+	
+	var name = exe_path.get_file().get_basename().to_lower()
+	var hash = name.hash()
+	var hue = float(abs(hash) % 360) / 360.0
+	var col = Color.from_hsv(hue, 0.7, 0.85)
+	
+	var img = Image.new()
+	img.create(128, 128, false, Image.FORMAT_RGB8)
+	for x in range(128):
+		for y in range(128):
+			var dx = float(x - 64) / 64.0
+			var dy = float(y - 64) / 64.0
+			var d = sqrt(dx * dx + dy * dy)
+			if d < 0.9:
+				var brightness = 1.0 - (d * d) * 0.5
+				img.set_pixel(x, y, col * brightness)
+			else:
+				img.set_pixel(x, y, Color(0, 0, 0, 0))
+	
+	var tex = ImageTexture.create_from_image(img)
+	return tex
+
+
+# ========================================== Main Startup
+
+func _ready() -> void:
+	setup_window(get_window())
+	load_achievements()
+	theme_index = int(read_cfg('ui', 'theme', 0))
+	
+	var layer := CanvasLayer.new()
+	layer.layer = 200
+	add_child(layer)
+	
+	var fade_rect = ColorRect.new()
+	fade_rect.color = Color(0, 0, 0, 1)
+	fade_rect.modulate.a = 0.0
+	fade_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(fade_rect)
+	fade_rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	
+	_show_login()
+
+
+func _show_login() -> void:
+	var login_scene = _build_login_screen()
+	add_child(login_scene)
+	current_screen = 'login'
+
+
+func _build_login_screen() -> Control:
+	var root = Control.new()
+	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	
+	# UI here would be the login screen with profiles, PIN entry, etc.
+	# (Full implementation would mirror the original login script)
+	
+	return root
+
+
+# ========================================== Init
+
+func _process(delta: float) -> void:
+	pass
+"
+
+[sub_resource type="GDScript" id="GDScript_login"]
+script/source = "extends Control
+
+# Login screen with PIN, profile selection, achievements
+
+const AV := 190.0
+const GAP := 300.0
+
+var core
+var bg_mat: ShaderMaterial
+var post_mat: ShaderMaterial
+
+var vp := Vector2(1920, 1080)
+var state := 'intro'
+var snd_on := true
+var accent := Color(0.80, 0.04, 0.07)
+var t_all := 0.0
+var clock_t := 0.0
+var reveal := 0.0
+
+var users: Array = []
+var entries: Array = []
+var tiles: Array = []
+var sel := 0
+var sel_f := 0.0
+var del_armed := -1
+
+var ui: Control
+var row: Control
+var title_l: Label
+var sub_l: Label
+var clock: Label
+var ring: Panel
+var ball_sb: StyleBoxFlat
+var brand: Label
+var brand_sub: Label
+var toast: Label
+var toast_tw: Tween
+var spinner: Control
+var welcome_l: Label
+var welcome_n: Label
+
+var s_tick: AudioStreamPlayer
+var s_ok: AudioStreamPlayer
+var s_back: AudioStreamPlayer
+var s_err: AudioStreamPlayer
+var s_welcome: AudioStreamPlayer
+var s_boot: AudioStreamPlayer
+
+var sign_t := 0.0
+var sign_idx := -1
+
+var modal: Control
+var modal_card: Panel
+var modal_kind := ''
+var modal_entry := {}
+var modal_idx := 0
+var pin_buf := ''
+var pin_lock := false
+var pin_dots: Array = []
+var name_edit: LineEdit
+var pin_edit: LineEdit
+var new_ci := 0
+var swatches: Array = []
+var prev_sb: StyleBoxFlat
+var prev_letter: Label
+
+
+func _ready() -> void:
+	core = get_parent()
+	bg_mat = core.get_node('Bg').material
+	post_mat = core.get_node('Post/Screen').material
+	_build_sounds()
+	_build_ui()
+	get_viewport().size_changed.connect(_on_resize)
+	_on_resize()
+
+
+func enter() -> void:
+	core.signed_in = false
+	snd_on = core.read_cfg('ui', 'sounds', true)
+	accent = THEMES[core.theme_index]['c']
+	_set_boost(0.0)
+	sign_t = 0.0
+	sign_idx = -1
+	reveal = 0.0
+	del_armed = -1
+	sel = 0
+	sel_f = 0.0
+	title_l.modulate.a = 1.0
+	sub_l.modulate.a = 1.0
+	spinner.modulate.a = 0.0
+	welcome_l.modulate.a = 0.0
+	welcome_n.modulate.a = 0.0
+	if modal != null:
+		modal.queue_free()
+		modal = null
+	_load_entries()
+	state = 'intro'
+	if core.intro_played:
+		_skip_intro(true)
+	else:
+		_intro_seq()
+
+
+# ========================================== Sounds
+
+func _build_sounds() -> void:
+	s_tick = core.player(self, [[1500.0, 0.0, 0.05, 0.35, 0.002], [3000.0, 0.0, 0.03, 0.12, 0.001]], 0.06, -8.0)
+	s_ok = core.player(self, [[880.0, 0.0, 0.14, 0.40, 0.004], [1320.0, 0.06, 0.22, 0.35, 0.004]], 0.30, -6.0)
+	s_back = core.player(self, [[660.0, 0.0, 0.12, 0.40, 0.004], [440.0, 0.07, 0.20, 0.40, 0.004]], 0.30, -7.0)
+	s_err = core.player(self, [[196.0, 0.0, 0.16, 0.45, 0.004], [175.0, 0.09, 0.22, 0.40, 0.004]], 0.34, -6.0)
+	s_welcome = core.player(self, [
+		[523.25, 0.0, 0.6, 0.30, 0.01],
+		[659.25, 0.09, 0.6, 0.28, 0.01],
+		[783.99, 0.18, 0.7, 0.26, 0.01],
+		[1046.5, 0.27, 1.0, 0.28, 0.01],
+		[1318.5, 0.40, 1.2, 0.18, 0.01],
+	], 1.8, -5.0)
+	s_boot = core.player(self, core.boot_notes(), 5.0, -4.0)
+
+
+func _snd(p: AudioStreamPlayer) -> void:
+	if snd_on:
+		p.play()
+
+
+# ========================================== UI Building
+
+func _build_ui() -> void:
+	ui = Control.new()
+	ui.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui.modulate.a = 0.0
+	add_child(ui)
+	ui.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+
+	ring = Panel.new()
+	ring.size = Vector2(46, 46)
+	var rs := StyleBoxFlat.new()
+	rs.draw_center = false
+	rs.set_border_width_all(3)
+	rs.border_color = Color(1, 1, 1, 0.95)
+	rs.set_corner_radius_all(23)
+	ring.add_theme_stylebox_override('panel', rs)
+	ui.add_child(ring)
+	var ball := Panel.new()
+	ball.size = Vector2(20, 20)
+	ball.position = Vector2(13, 13)
+	ball_sb = StyleBoxFlat.new()
+	ball_sb.bg_color = accent
+	ball_sb.set_corner_radius_all(10)
+	ball.add_theme_stylebox_override('panel', ball_sb)
+	ring.add_child(ball)
+
+	brand = core.label('FUSION', 34, true)
+	ui.add_child(brand)
+	brand_sub = core.label('CONSOLE v2', 15, false, Color(1, 1, 1, 0.6))
+	ui.add_child(brand_sub)
+
+	clock = core.label('00:00', 32, true)
+	clock.size = Vector2(130, 40)
+	clock.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	ui.add_child(clock)
+
+	title_l = core.label(\"Who's playing?\", 68, true)
+	title_l.size = Vector2(1400, 90)
+	title_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	ui.add_child(title_l)
+	sub_l = core.label('Choose a profile to sign in', 26, false, Color(1, 1, 1, 0.65))
+	sub_l.size = Vector2(1400, 40)
+	sub_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	ui.add_child(sub_l)
+
+	row = Control.new()
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui.add_child(row)
+
+	spinner = Control.new()
+	spinner.size = Vector2(420, 420)
+	spinner.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	spinner.modulate.a = 0.0
+	spinner.draw.connect(_draw_spinner)
+	ui.add_child(spinner)
+
+	welcome_l = core.label('WELCOME', 26, true, Color(1, 1, 1, 0.6))
+	welcome_l.size = Vector2(1000, 36)
+	welcome_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	welcome_l.modulate.a = 0.0
+	ui.add_child(welcome_l)
+	welcome_n = core.label('', 80, true)
+	welcome_n.size = Vector2(1400, 100)
+	welcome_n.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	welcome_n.modulate.a = 0.0
+	ui.add_child(welcome_n)
+
+	toast = core.label('', 26, true)
+	var ts := StyleBoxFlat.new()
+	ts.bg_color = Color(0.05, 0.05, 0.07, 0.88)
+	ts.set_corner_radius_all(24)
+	ts.content_margin_left = 28
+	ts.content_margin_right = 28
+	ts.content_margin_top = 12
+	ts.content_margin_bottom = 12
+	toast.add_theme_stylebox_override('normal', ts)
+	toast.modulate.a = 0.0
+	ui.add_child(toast)
+
+
+func _on_resize() -> void:
+	vp = get_viewport_rect().size
+	ring.position = Vector2(64, 36)
+	brand.position = Vector2(124, 28)
+	brand_sub.position = Vector2(127, 68)
+	clock.position = Vector2(vp.x - 64.0 - 130.0, 36)
+	title_l.position = Vector2(vp.x * 0.5 - 700.0, vp.y * 0.5 - 330.0)
+	sub_l.position = Vector2(vp.x * 0.5 - 700.0, vp.y * 0.5 - 245.0)
+	welcome_l.position = Vector2(vp.x * 0.5 - 500.0, vp.y * 0.5 + 135.0)
+	welcome_n.position = Vector2(vp.x * 0.5 - 700.0, vp.y * 0.5 + 170.0)
+
+
+# ========================================== Profile Tiles
+
+func _load_entries() -> void:
+	users = core.load_users()
+	var theme_c = THEMES[core.theme_index]['c']
+	entries.clear()
+	for i in users.size():
+		var u: Dictionary = users[i]
+		var c: Color = core.AVATAR_COLORS[int(u.get('ci', 0)) % core.AVATAR_COLORS.size()]
+		entries.append({'kind': 'user', 'name': str(u['name']), 'col': c, 'bg': c, 'pin': str(u.get('pin', '')), 'ui': i})
+	entries.append({'kind': 'guest', 'name': 'Guest', 'col': Color(0.42, 0.44, 0.52), 'bg': theme_c, 'pin': ''})
+	entries.append({'kind': 'add', 'name': 'Add User', 'col': Color(0.14, 0.14, 0.19), 'bg': theme_c, 'pin': ''})
+	_rebuild_tiles()
+
+
+func _rebuild_tiles() -> void:
+	for c in row.get_children():
+		row.remove_child(c)
+		c.queue_free()
+	tiles.clear()
+	for i in entries.size():
+		var tl := _make_tile(entries[i], i)
+		row.add_child(tl['node'])
+		tiles.append(tl)
+	sel = clampi(sel, 0, entries.size() - 1)
+
+
+func _make_tile(e: Dictionary, idx: int) -> Dictionary:
+	var col: Color = e['col']
+	var kind: String = e['kind']
+	var root := Control.new()
+	root.size = Vector2(AV, AV + 70.0)
+	root.pivot_offset = Vector2(AV, AV) * 0.5
+
+	var halo := Panel.new()
+	halo.size = Vector2(AV, AV)
+	var hsb := StyleBoxFlat.new()
+	hsb.bg_color = col
+	hsb.set_corner_radius_all(int(AV * 0.5))
+	hsb.shadow_color = Color(col, 0.0)
+	hsb.shadow_size = 0
+	halo.add_theme_stylebox_override('panel', hsb)
+	root.add_child(halo)
+
+	var disc := Panel.new()
+	disc.size = Vector2(AV, AV)
+	var dsb := StyleBoxFlat.new()
+	dsb.bg_color = col
+	dsb.set_corner_radius_all(int(AV * 0.5))
+	dsb.set_border_width_all(4)
+	dsb.border_color = Color(1, 1, 1, 0.28 if kind != 'add' else 0.4)
+	disc.add_theme_stylebox_override('panel', dsb)
+	root.add_child(disc)
+
+	var gloss := Panel.new()
+	gloss.size = Vector2(AV * 0.74, AV * 0.40)
+	gloss.position = Vector2(AV * 0.13, AV * 0.07)
+	var gsb := StyleBoxFlat.new()
+	gsb.bg_color = Color(1, 1, 1, 0.13 if kind != 'add' else 0.0)
+	gsb.set_corner_radius_all(int(AV * 0.2))
+	gloss.add_theme_stylebox_override('panel', gsb)
+	root.add_child(gloss)
+
+	var glyph := '+'
+	if kind != 'add':
+		glyph = String(e['name']).substr(0, 1).to_upper()
+	var gl = core.label(glyph, 92 if kind != 'add' else 110, true, Color(1, 1, 1, 0.95))
+	gl.size = Vector2(AV, AV)
+	gl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	gl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	root.add_child(gl)
+
+	if String(e['pin']) != '':
+		var badge := Panel.new()
+		badge.size = Vector2(62, 32)
+		badge.position = Vector2(AV - 62.0, AV - 36.0)
+		var bsb := StyleBoxFlat.new()
+		bsb.bg_color = Color(0.04, 0.04, 0.06, 0.92)
+		bsb.set_corner_radius_all(16)
+		badge.add_theme_stylebox_override('panel', bsb)
+		var bl = core.label('PIN', 17, true, Color(1, 1, 1, 0.9))
+		bl.size = Vector2(62, 32)
+		bl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		bl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		badge.add_child(bl)
+		root.add_child(badge)
+
+	var rng := Panel.new()
+	rng.size = Vector2(AV + 34.0, AV + 34.0)
+	rng.position = Vector2(-17, -17)
+	rng.pivot_offset = rng.size * 0.5
+	var rsb := StyleBoxFlat.new()
+	rsb.draw_center = false
+	rsb.set_border_width_all(5)
+	rsb.border_color = Color(1, 1, 1, 1)
+	rsb.set_corner_radius_all(int((AV + 34.0) * 0.5))
+	rng.add_theme_stylebox_override('panel', rsb)
+	root.add_child(rng)
+
+	var nl = core.label(String(e['name']), 30, true)
+	nl.size = Vector2(AV + 80.0, 42)
+	nl.position = Vector2(-40, AV + 30.0)
+	nl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	nl.clip_text = true
+	root.add_child(nl)
+
+	core.ignore_mouse(root)
+	root.gui_input.connect(_tile_gui.bind(idx))
+	return {'node': root, 'halo': hsb, 'ring': rng, 'name': nl, 'press': 0.0}
+
+
+func _tile_gui(e: InputEvent, i: int) -> void:
+	if state != 'pick':
+		return
+	var m := e as InputEventMouseButton
+	if m and m.pressed and m.button_index == MOUSE_BUTTON_LEFT:
+		if i == sel:
+			_activate()
+		else:
+			_select(i)
+
+
+# ========================================== Intro Animation
+
+func _set_boost(v: float) -> void:
+	post_mat.set_shader_parameter('bloom_boost', v)
+
+
+func _intro_seq() -> void:
+	await get_tree().create_timer(3.6).timeout
+	_skip_intro(false)
+
+
+func _skip_intro(instant: bool) -> void:
+	if state != 'intro':
+		return
+	state = 'pick'
+	core.intro_played = true
+	if instant:
+		ui.modulate.a = 1.0
+		create_tween().tween_property(self, 'reveal', 1.0, 1.1).from(0.0)
+	else:
+		var tw := create_tween().set_parallel(true)
+		tw.tween_method(_set_boost, 0.7, 0.0, 1.3)
+		tw.tween_property(ui, 'modulate:a', 1.0, 0.9).set_delay(0.3)
+		tw.tween_property(self, 'reveal', 1.0, 1.1).set_delay(0.35)
+
+
+# ========================================== Navigation
+
+func _select(i: int) -> void:
+	i = clampi(i, 0, entries.size() - 1)
+	if i == sel:
+		return
+	sel = i
+	del_armed = -1
+	_snd(s_tick)
+
+
+func _move(dir: int) -> void:
+	var ni := sel + dir
+	if ni < 0 or ni >= entries.size():
+		sel_f += float(dir) * 0.14
+		return
+	_select(ni)
+
+
+func _activate() -> void:
+	if state != 'pick' or entries.is_empty():
+		return
+	var e: Dictionary = entries[sel]
+	match String(e['kind']):
+		'add':
+			_snd(s_ok)
+			_open_new()
+		'guest':
+			_sign_in(sel)
+		_:
+			if String(e['pin']) != '':
+				_snd(s_ok)
+				_open_pin(sel)
+			else:
+				_sign_in(sel)
+
+
+func _sign_in(i: int) -> void:
+	var e: Dictionary = entries[i]
+	state = 'signing'
+	sign_idx = i
+	var c: Color = e['bg']
+	core.sign_in(String(e['name']), c)
+	welcome_n.text = String(e['name'])
+	_snd(s_welcome)
+	var tw := create_tween().set_parallel(true)
+	tw.tween_property(self, 'sign_t', 1.0, 0.9).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_property(spinner, 'modulate:a', 1.0, 0.4).set_delay(0.3)
+	tw.tween_property(welcome_l, 'modulate:a', 1.0, 0.5).set_delay(0.5)
+	tw.tween_property(welcome_n, 'modulate:a', 1.0, 0.6).set_delay(0.65)
+	tw.tween_method(_set_boost, 0.0, 0.9, 1.6).set_delay(0.5)
+	await get_tree().create_timer(2.3).timeout
+
+
+func _toast(msg: String) -> void:
+	toast.text = msg
+	toast.reset_size()
+	toast.position = Vector2(vp.x * 0.5 - toast.size.x * 0.5, vp.y - 170.0)
+	if toast_tw:
+		toast_tw.kill()
+	toast_tw = create_tween()
+	toast_tw.tween_property(toast, 'modulate:a', 1.0, 0.15)
+	toast_tw.tween_interval(1.8)
+	toast_tw.tween_property(toast, 'modulate:a', 0.0, 0.4)
+
+
+# ========================================== Modal - PIN
+
+func _open_pin(i: int) -> void:
+	state = 'modal'
+	modal_kind = 'pin'
+	modal_idx = i
+	modal_entry = entries[i]
+	pin_buf = ''
+	pin_lock = false
+
+
+# ========================================== Modal - New Profile
+
+func _open_new() -> void:
+	state = 'modal'
+	modal_kind = 'new'
+	new_ci = users.size() % core.AVATAR_COLORS.size()
+
+
+# ========================================== Input
+
+func _input(e: InputEvent) -> void:
+	var k := e as InputEventKey
+	if state == 'intro':
+		if (k and k.pressed) or e is InputEventMouseButton:
+			_skip_intro(false)
+		return
+	if state == 'signing':
+		return
+	if e.is_action_pressed('ui_right', true):
+		_move(1)
+	elif e.is_action_pressed('ui_left', true):
+		_move(-1)
+	elif e.is_action_pressed('ui_accept'):
+		_activate()
+
+
+# ========================================== Animation Loop
+
+func _draw_spinner() -> void:
+	var c := spinner.size * 0.5
+	var r := 178.0
+	var a0 := t_all * 4.4
+	spinner.draw_arc(c, r, 0.0, TAU, 96, Color(1, 1, 1, 0.10), 6.0, true)
+	spinner.draw_arc(c, r, a0, a0 + 2.3, 48, Color(1, 1, 1, 0.95), 6.0, true)
+	spinner.draw_arc(c, r, a0 + PI, a0 + PI + 0.9, 24, Color(1, 1, 1, 0.5), 6.0, true)
+
+
+func _process(delta: float) -> void:
+	t_all += delta
+	var k := 1.0 - exp(-delta * 11.0)
+	sel_f = lerpf(sel_f, float(sel), k)
+
+	accent = accent.lerp(THEMES[core.theme_index]['c'], 1.0 - exp(-delta * 5.0))
+	bg_mat.set_shader_parameter('accent', accent)
+	ball_sb.bg_color = accent.lightened(0.08)
+
+	clock_t -= delta
+	if clock_t <= 0.0:
+		clock_t = 1.0
+		var td := Time.get_time_dict_from_system()
+		clock.text = '%02d:%02d' % [td['hour'], td['minute']]
+
+	var n := tiles.size()
+	var cx := vp.x * 0.5
+	var cy := vp.y * 0.5 - 10.0
+	var off := 0.0
+	if float(n) * GAP > vp.x - 240.0:
+		off = -(sel_f - float(n - 1) * 0.5) * GAP
+
+	for i in n:
+		var tl: Dictionary = tiles[i]
+		var nd: Control = tl['node']
+		var d := float(i) - sel_f
+		var focus := clampf(1.0 - absf(d), 0.0, 1.0)
+		focus = focus * focus * (3.0 - 2.0 * focus)
+		var a := clampf(reveal * 2.2 - float(i) * 0.18, 0.0, 1.0)
+		a = a * a * (3.0 - 2.0 * a)
+		tl['press'] = maxf(float(tl['press']) - delta * 6.0, 0.0)
+
+		var x := cx + (float(i) - float(n - 1) * 0.5) * GAP + off
+		var y := cy - AV * 0.5 - 14.0 * focus + (1.0 - a) * 60.0
+		var sc := 1.0 + 0.28 * focus - 0.06 * float(tl['press'])
+		nd.position = Vector2(x - AV * 0.5, y)
+		nd.scale = Vector2(sc, sc)
+		var v := lerpf(0.58, 1.0, focus)
+		nd.modulate = Color(v, v, v, a)
+"
+
+[node name="FusionConsole" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = SubResource("GDScript_console")
+
+[node name="Bg" type="ColorRect" parent="."]
+material = SubResource("Mat_bg")
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0, 0, 0, 1)
+
+[node name="Login" type="Control" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = SubResource("GDScript_login")
+
+[node name="Post" type="CanvasLayer" parent="."]
+layer = 100
+
+[node name="Screen" type="ColorRect" parent="Post"]
+material = SubResource("Mat_post")
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
